@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "metrics": "python -m slop_code.metrics.driver"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
