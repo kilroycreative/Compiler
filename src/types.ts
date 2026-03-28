@@ -49,6 +49,7 @@ export type PropertyFlag =
   | "PROP_worktree_created"
   | "PROP_executed"
   | "PROP_verified"
+  | "PROP_slop_reviewed"
   | "PROP_security_reviewed"
   | "PROP_merged"
   | "PROP_linked";
@@ -112,6 +113,25 @@ export interface StageDefinition {
   retry: RetryPolicy;
   execute: (ctx: PipelineContext) => Promise<void>;
   compensate?: (ctx: PipelineContext) => Promise<void>;
+}
+
+// ── Slop Metrics ──────────────────────────────────────────────────
+
+export interface SlopMetrics {
+  cc_max: number;
+  cc_mean: number;
+  cc_high_count: number;       // functions with CC > 10
+  lint_errors: number;
+  ast_grep_violations: number;
+  clone_ratio: number;         // 0.0–1.0
+  trivial_wrappers: number;
+  single_use_functions: number;
+  loc: number;
+  // delta metrics (null on first run, populated on subsequent runs)
+  delta_loc: number | null;
+  delta_cc_high_count: number | null;
+  delta_ast_grep_violations: number | null;
+  delta_churn_ratio: number | null;
 }
 
 // ── Pipeline Context ───────────────────────────────────────────────

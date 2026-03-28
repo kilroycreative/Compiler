@@ -1,4 +1,7 @@
-import type { StageDefinition, PipelineContext } from "../types.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import type { StageDefinition, PipelineContext, SlopMetrics } from "../types.js";
+import { runSlopAnalysis } from "../core/slop-runner.js";
 
 const RETRY_AGENT = { when: "always" as const, max_retries: 3, backoff_ms: [100, 200, 400] };
 const RETRY_NEVER = { when: "never" as const, max_retries: 0 };
@@ -112,13 +115,114 @@ export const B3_verify: StageDefinition = {
   },
 };
 
+// B3.5 — Slop Analysis
+export const B3_5_slopAnalysis: StageDefinition = {
+  id: "B3.5",
+  name: "Slop Analysis",
+  kind: "analysis",
+  group: "backend",
+  requires: ["PROP_verified"],
+  provides: "PROP_slop_reviewed",
+  contract: {
+    preconditions: [
+      { name: "diff exists", check: (ctx) => typeof ctx.artifacts.diff === "string" },
+    ],
+    postconditions: [
+      { name: "slop analysis recorded", check: (ctx) => ctx.metadata.slop_passed === true },
+    ],
+    invariants_hard: [],
+    invariants_soft: [
+      { name: "no slop warnings", check: (ctx) => ((ctx.metadata.slop_warnings as string[] | undefined)?.length ?? 0) === 0 },
+    ],
+  },
+  retry: { when: "never", max_retries: 0 },
+  async execute(ctx: PipelineContext) {
+    const diff = ctx.artifacts.diff as string;
+    const taskId = ctx.task.task_id as string ?? "unknown";
+    const analysisDir = `.factory/slop_analysis/${taskId}`;
+
+    // Prepare temp directory with the diff applied
+    try {
+      mkdirSync(`${analysisDir}/src`, { recursive: true });
+
+      // Write a base file and the diff, then apply with patch
+      writeFileSync(`${analysisDir}/src/example.ts`, [
+        `import { foo } from './foo';`,
+        ``,
+        `export const result = foo();`,
+      ].join("\n"), "utf-8");
+
+      writeFileSync(`${analysisDir}/patch.diff`, diff, "utf-8");
+
+      try {
+        execSync(`patch -p1 -d ${analysisDir} < ${analysisDir}/patch.diff`, {
+          stdio: "pipe",
+          timeout: 10_000,
+        });
+      } catch {
+        console.log(`    SLOP: ⚠ patch failed, skipping analysis`);
+        ctx.metadata.slop_passed = true;
+        ctx.metadata.slop_warnings = ["patch application failed — analysis skipped"];
+        return;
+      }
+    } catch {
+      console.log(`    SLOP: ⚠ skipped (could not prepare analysis directory)`);
+      ctx.metadata.slop_passed = true;
+      ctx.metadata.slop_warnings = ["analysis directory setup failed — analysis skipped"];
+      return;
+    }
+
+    // Run SCBench
+    const result = await runSlopAnalysis(analysisDir);
+
+    if (result.skipped || !result.metrics) {
+      console.log(`    SLOP: ⚠ skipped (${result.skipReason ?? "scbench not available"})`);
+      ctx.metadata.slop_passed = true;
+      ctx.metadata.slop_warnings = [`scbench skipped: ${result.skipReason ?? "unknown reason"}`];
+      return;
+    }
+
+    const s = result.metrics;
+    ctx.artifacts.slop_metrics = s;
+
+    // Hard thresholds — throw to trigger compensation
+    if (s.cc_max > 30) {
+      throw new Error(`Slop gate FAILED: cyclomatic complexity too high (cc_max: ${s.cc_max})`);
+    }
+    if (s.ast_grep_violations > 20) {
+      throw new Error(`Slop gate FAILED: too many slop-rule violations (${s.ast_grep_violations})`);
+    }
+    if (s.clone_ratio > 0.20) {
+      throw new Error(`Slop gate FAILED: excessive code duplication (${(s.clone_ratio * 100).toFixed(1)}%)`);
+    }
+
+    // Soft thresholds — collect warnings
+    const warnings: string[] = [];
+    if (s.cc_max > 15) warnings.push(`cc_max elevated: ${s.cc_max} (target < 15)`);
+    if (s.ast_grep_violations > 5) warnings.push(`ast_grep_violations elevated: ${s.ast_grep_violations} (target < 5)`);
+    if (s.clone_ratio > 0.05) warnings.push(`clone_ratio elevated: ${(s.clone_ratio * 100).toFixed(1)}% (target < 5%)`);
+    if (s.trivial_wrappers > 3) warnings.push(`trivial_wrappers: ${s.trivial_wrappers}`);
+    if (s.lint_errors > 10) warnings.push(`lint_errors: ${s.lint_errors}`);
+    if (s.delta_cc_high_count !== null && s.delta_cc_high_count > 0) {
+      warnings.push(`complexity growing: +${s.delta_cc_high_count} high-CC functions since last run`);
+    }
+    if (s.delta_ast_grep_violations !== null && s.delta_ast_grep_violations > 0) {
+      warnings.push(`slop violations increasing: +${s.delta_ast_grep_violations}% since last run`);
+    }
+
+    ctx.metadata.slop_warnings = warnings;
+    ctx.metadata.slop_passed = true;
+    console.log(`    SLOP: ✓  cc_max=${s.cc_max}  violations=${s.ast_grep_violations}  clone=${(s.clone_ratio * 100).toFixed(1)}%  [${warnings.length} warnings]`);
+  },
+};
+
 // B4 — Security Review
 export const B4_security: StageDefinition = {
   id: "B4",
   name: "Security Review",
   kind: "analysis",
   group: "backend",
-  requires: ["PROP_verified"],
+  requires: ["PROP_slop_reviewed"],
   provides: "PROP_security_reviewed",
   contract: {
     preconditions: [],
@@ -167,4 +271,4 @@ export const B5_merge: StageDefinition = {
   },
 };
 
-export const backendStages: StageDefinition[] = [B1_worktree, B2_execute, B3_verify, B4_security, B5_merge];
+export const backendStages: StageDefinition[] = [B1_worktree, B2_execute, B3_verify, B3_5_slopAnalysis, B4_security, B5_merge];

@@ -1,5 +1,5 @@
 import { rmSync } from "node:fs";
-import type { PipelineContext } from "./types.js";
+import type { PipelineContext, SlopMetrics } from "./types.js";
 import { emit, replay } from "./core/event-store.js";
 import { runPipeline } from "./core/pipeline.js";
 import { frontendStages } from "./stages/frontend.js";
@@ -46,6 +46,27 @@ async function main() {
   const result2 = await runPipeline(allStages, ctx2, ctx2.task.task_id as string ?? "pending");
   console.log(`\n  Result: ${result2.success ? "SUCCESS" : "FAILED — " + result2.error}`);
   console.log(`  Cache hit: ${ctx2.metadata.cache_hit}`);
+
+  // ── Slop Analysis Summary ─────────────────────────────────────────
+  if (ctx1.artifacts.slop_metrics) {
+    const s = ctx1.artifacts.slop_metrics as SlopMetrics;
+    console.log(`\n── Slop Analysis (Run 1) ─────────────────────────────`);
+    console.log(`   cc_max=${s.cc_max}  violations=${s.ast_grep_violations}  clone=${(s.clone_ratio * 100).toFixed(1)}%  loc=${s.loc}`);
+    if (ctx1.metadata.slop_warnings && (ctx1.metadata.slop_warnings as string[]).length > 0) {
+      console.log(`   Warnings:`);
+      for (const w of ctx1.metadata.slop_warnings as string[]) console.log(`     ⚠ ${w}`);
+    }
+  }
+
+  if (ctx2.artifacts.slop_metrics) {
+    const s = ctx2.artifacts.slop_metrics as SlopMetrics;
+    console.log(`\n── Slop Analysis (Run 2) ─────────────────────────────`);
+    console.log(`   cc_max=${s.cc_max}  violations=${s.ast_grep_violations}  clone=${(s.clone_ratio * 100).toFixed(1)}%  loc=${s.loc}`);
+    if (ctx2.metadata.slop_warnings && (ctx2.metadata.slop_warnings as string[]).length > 0) {
+      console.log(`   Warnings:`);
+      for (const w of ctx2.metadata.slop_warnings as string[]) console.log(`     ⚠ ${w}`);
+    }
+  }
 
   // ── Event log summary ────────────────────────────────────────────
   const events = replay();
