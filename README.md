@@ -17,19 +17,32 @@ npm run metrics   # run SCBench metrics directly
 ## Pipeline Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
   subgraph Frontend
-    F1[F1 Parse] --> F2[F2 Validate] --> F3[F3 Dedup] --> F4[F4 Risk]
+    F1[F1 Parse] --> F2[F2 Validate]
+    F2 --> F3[F3 Dedup]
+    F3 --> F4[F4 Risk]
   end
+
   subgraph Middle
-    M1[M1 Deps] --> M2[M2 Conflicts] --> M3[M3 Model] --> M4[M4 Constitution] --> M5[M5 Session]
+    M1[M1 Deps] --> M2[M2 Conflicts]
+    M2 --> M3[M3 Model]
+    M3 --> M4[M4 Constitution]
+    M4 --> M5[M5 Session]
   end
+
   subgraph Backend
-    B1[B1 Worktree] --> B2[B2 Execute Agent] --> B3[B3 Verify] --> B3_5[B3.5 Slop Analysis] --> B4[B4 Security] --> B5[B5 Merge]
+    B1[B1 Worktree] --> B2[B2 Execute Agent]
+    B2 --> B3[B3 Verify]
+    B3 --> B3_5[B3.5 Slop Analysis]
+    B3_5 --> B4[B4 Security]
+    B4 --> B5[B5 Merge]
   end
+
   subgraph Linker
     L1[L1 Link & Finalize]
   end
+
   F4 --> M1
   M5 --> B1
   B5 --> L1
