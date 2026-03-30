@@ -2,6 +2,7 @@ import type { StageDefinition, PipelineContext } from "../types.js";
 import { execSync } from "child_process";
 import * as cache from "../core/action-cache.js";
 import { emit } from "../core/event-store.js";
+import { parseUserInput } from "../core/input-parser.js";
 
 const RETRY_FRONTEND = { when: "on_error" as const, max_retries: 2 };
 
@@ -33,6 +34,9 @@ export const F1_parse: StageDefinition = {
   },
   retry: RETRY_FRONTEND,
   async execute(ctx: PipelineContext) {
+    const parsed = parseUserInput(ctx.task.description as string);
+    ctx.metadata.parsed_input = parsed;
+
     if (!ctx.task.task_id) {
       ctx.task.task_id = `task_${Date.now().toString(36)}`;
     }
