@@ -67,6 +67,7 @@ export type PipelineEventType =
   | "CacheMiss"
   | "CacheStore"
   | "CircuitBreakerTripped"
+  | "QualityCircuitBreakerTripped"
   | "PipelineCompleted"
   | "PipelineFailed";
 

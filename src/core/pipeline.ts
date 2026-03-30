@@ -2,11 +2,14 @@ import type { PipelineContext, StageDefinition } from "../types.js";
 import { emit } from "./event-store.js";
 import { checkPreconditions, checkPostconditions, checkInvariants } from "./contracts.js";
 import { register, compensateFrom, clear } from "./compensation.js";
+import { qualityCircuitBreaker, type AgentOutput } from "../harness/quality-breaker.js";
 
 // ── Circuit Breaker ────────────────────────────────────────────────
 
 const failureCounts = new Map<string, number>();
 const CIRCUIT_BREAKER_THRESHOLD = 3;
+const recentOutputsByAgent = new Map<string, AgentOutput[]>();
+const OUTPUT_HISTORY_LIMIT = 10;
 
 function isCircuitOpen(stageId: string): boolean {
   return (failureCounts.get(stageId) ?? 0) >= CIRCUIT_BREAKER_THRESHOLD;
@@ -16,6 +19,57 @@ function recordFailure(stageId: string): number {
   const count = (failureCounts.get(stageId) ?? 0) + 1;
   failureCounts.set(stageId, count);
   return count;
+}
+
+function getAgentId(ctx: PipelineContext): string {
+  const taskAgentId = ctx.task.agent_id ?? ctx.task.assignee_agent_id;
+  if (typeof taskAgentId === "string" && taskAgentId.length > 0) return taskAgentId;
+  return "default-agent";
+}
+
+function getRecentOutputs(agentId: string): AgentOutput[] {
+  return recentOutputsByAgent.get(agentId) ?? [];
+}
+
+function recordAgentOutput(agentId: string, output: AgentOutput): void {
+  const current = recentOutputsByAgent.get(agentId) ?? [];
+  current.push(output);
+  if (current.length > OUTPUT_HISTORY_LIMIT) {
+    current.splice(0, current.length - OUTPUT_HISTORY_LIMIT);
+  }
+  recentOutputsByAgent.set(agentId, current);
+}
+
+function markAgentCommit(agentId: string, committedAt: string): void {
+  const outputs = recentOutputsByAgent.get(agentId);
+  if (!outputs || outputs.length === 0) return;
+  outputs[outputs.length - 1] = { ...outputs[outputs.length - 1], lastCommittedAt: committedAt };
+}
+
+function captureAgentOutput(stageId: string, ctx: PipelineContext): AgentOutput | null {
+  if (stageId !== "B2") return null;
+
+  const taskDescription = typeof ctx.task.description === "string" ? ctx.task.description : "";
+  const agentResult =
+    typeof ctx.artifacts.agent_result === "object" && ctx.artifacts.agent_result !== null
+      ? (ctx.artifacts.agent_result as Record<string, unknown>)
+      : {};
+
+  const output =
+    typeof agentResult.output === "string"
+      ? agentResult.output
+      : typeof ctx.artifacts.diff === "string"
+        ? ctx.artifacts.diff
+        : taskDescription;
+
+  if (!output) return null;
+
+  return {
+    description: taskDescription || output.slice(0, 200),
+    output,
+    createdAt: new Date().toISOString(),
+    activeSession: true,
+  };
 }
 
 // ── Single Stage Execution with Retry ──────────────────────────────
@@ -60,6 +114,21 @@ export async function runPipeline(
 
   for (let i = 0; i < stages.length; i++) {
     const stage = stages[i];
+    const agentId = getAgentId(ctx);
+    const health = qualityCircuitBreaker.checkHealth(agentId, getRecentOutputs(agentId));
+
+    if (health === "tripped") {
+      const msg = `Quality circuit breaker TRIPPED for agent ${agentId} — pausing pipeline`;
+      qualityCircuitBreaker.pauseAgent(agentId);
+      console.log(`  ⛔ ${msg}`);
+      emit("QualityCircuitBreakerTripped", taskId, stage.id, { agent_id: agentId });
+      await compensateFrom(taskId, ctx);
+      emit("PipelineFailed", taskId, stage.id, { reason: msg });
+      return { success: false, error: msg };
+    }
+    if (health === "degraded") {
+      console.log(`  ⚠ quality degraded for agent ${agentId}; continuing with caution`);
+    }
 
     // Circuit breaker check
     if (isCircuitOpen(stage.id)) {
@@ -102,6 +171,13 @@ export async function runPipeline(
 
       // Mark property
       ctx.properties.add(stage.provides);
+      const capturedOutput = captureAgentOutput(stage.id, ctx);
+      if (capturedOutput) {
+        recordAgentOutput(agentId, capturedOutput);
+      }
+      if (stage.id === "B5" && typeof ctx.artifacts.merge_commit === "string" && ctx.artifacts.merge_commit !== "no-git-merge") {
+        markAgentCommit(agentId, new Date().toISOString());
+      }
       emit("StageCompleted", taskId, stage.id);
     } catch (err) {
       const count = recordFailure(stage.id);
