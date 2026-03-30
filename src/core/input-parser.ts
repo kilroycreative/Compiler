@@ -33,6 +33,30 @@ export function parseUserInput(raw: string): ParsedInput {
   return { action, target, description };
 }
 
+// Matches code identifiers: camelCase, PascalCase, snake_case, SCREAMING_CASE
+// Ignores plain English words (all lowercase, no underscores, ≤ 1 capital)
+const IDENTIFIER_PATTERN = /\b([A-Z][\w]*[a-z][\w]*|[a-z]+(?:[A-Z][\w]*)+|[a-z]+(?:_[a-z]+)+|[A-Z][A-Z_]{2,})\b/g;
+
+/**
+ * Extract code-style identifiers from user input text.
+ * Recognises camelCase, PascalCase, snake_case, and SCREAMING_SNAKE_CASE.
+ * Returns unique identifiers in the order they first appear.
+ */
+export function extractIdentifiers(text: string): string[] {
+  IDENTIFIER_PATTERN.lastIndex = 0;
+  const seen = new Set<string>();
+  const result: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = IDENTIFIER_PATTERN.exec(text)) !== null) {
+    const id = m[1];
+    if (!seen.has(id)) {
+      seen.add(id);
+      result.push(id);
+    }
+  }
+  return result;
+}
+
 // Matches paths like src/core/foo.ts, ./lib/bar.js, components/Baz.tsx
 const FILE_PATH_PATTERN = /(?:^|\s)(\.?\.?(?:[\w.@-]+\/)+[\w.@-]+\.[\w]+)(?=\s|$)/g;
 
