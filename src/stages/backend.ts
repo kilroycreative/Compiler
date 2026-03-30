@@ -1,5 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import type { StageDefinition, PipelineContext, SlopMetrics } from "../types.js";
 import { runSlopAnalysis } from "../core/slop-runner.js";
 import {
@@ -53,6 +55,11 @@ function hasCommand(binary: string): boolean {
   } catch {
     return false;
   }
+}
+
+function envFlagEnabled(value: string | undefined): boolean {
+  if (!value) return false;
+  return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
 function toStringArray(value: unknown): string[] {
@@ -122,13 +129,101 @@ export const B1_worktree: StageDefinition = {
   },
   retry: { when: "on_error", max_retries: 2 },
   async execute(ctx: PipelineContext) {
-    ctx.task.worktree_path = `.factory/worktrees/${ctx.task.task_id}`;
+    const taskId = String(ctx.task.task_id ?? `task_${Date.now().toString(36)}`);
+    const branch = `factory/${taskId}`;
+    const relativeWorktreePath = `.factory/worktrees/${taskId}`;
+    const forceRecreate = envFlagEnabled(process.env.COMPILER_WORKTREE_RECREATE);
+
+    let repoRoot = "";
+    try {
+      repoRoot = execSync("git rev-parse --show-toplevel", {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      repoRoot = "";
+    }
+
+    if (!repoRoot) {
+      const tmpBase = mkdtempSync(join(tmpdir(), `factory-${taskId}-`));
+      const tempWorkspace = join(tmpBase, "workspace");
+      cpSync(process.cwd(), tempWorkspace, { recursive: true });
+
+      ctx.task.worktree_path = tempWorkspace;
+      ctx.artifacts.worktree_created = true;
+      ctx.artifacts.worktree_mode = "temp-copy";
+      ctx.artifacts.worktree_branch = branch;
+      console.log(`    worktree (fallback copy) → ${ctx.task.worktree_path}`);
+      return;
+    }
+
+    const worktreePath = resolve(repoRoot, relativeWorktreePath);
+    mkdirSync(resolve(repoRoot, ".factory", "worktrees"), { recursive: true });
+
+    let branchExists = false;
+    try {
+      execSync(`git rev-parse --verify refs/heads/${branch}`, {
+        cwd: repoRoot,
+        stdio: "ignore",
+      });
+      branchExists = true;
+    } catch {
+      branchExists = false;
+    }
+
+    if (branchExists && forceRecreate) {
+      try {
+        execSync(`git worktree remove ${worktreePath} --force`, { cwd: repoRoot, stdio: "ignore" });
+      } catch {
+        // Ignore cleanup miss; branch delete below still ensures recreate can proceed.
+      }
+      execSync(`git branch -D ${branch}`, { cwd: repoRoot, stdio: "ignore" });
+      branchExists = false;
+    }
+
+    if (branchExists) {
+      if (!existsSync(worktreePath)) {
+        execSync(`git worktree add ${worktreePath} ${branch}`, { cwd: repoRoot, stdio: "ignore" });
+      } else {
+        console.log(`    reusing existing worktree for ${branch}`);
+      }
+    } else {
+      execSync(`git worktree add ${worktreePath} -b ${branch} HEAD`, { cwd: repoRoot, stdio: "ignore" });
+    }
+
+    ctx.task.worktree_path = worktreePath;
     ctx.artifacts.worktree_created = true;
+    ctx.artifacts.worktree_mode = "git";
+    ctx.artifacts.worktree_repo_root = repoRoot;
+    ctx.artifacts.worktree_branch = branch;
     console.log(`    worktree → ${ctx.task.worktree_path}`);
   },
   async compensate(ctx: PipelineContext) {
-    console.log(`    removing worktree ${ctx.task.worktree_path}`);
+    const worktreePath = String(ctx.task.worktree_path ?? "");
+    const mode = String(ctx.artifacts.worktree_mode ?? "");
+    const branch = String(ctx.artifacts.worktree_branch ?? "");
+    const repoRoot = String(ctx.artifacts.worktree_repo_root ?? "");
+
+    if (mode === "git" && repoRoot && branch) {
+      try {
+        execSync(`git worktree remove ${worktreePath} --force`, { cwd: repoRoot, stdio: "ignore" });
+      } catch {
+        // Best-effort cleanup.
+      }
+      try {
+        execSync(`git branch -D ${branch}`, { cwd: repoRoot, stdio: "ignore" });
+      } catch {
+        // Branch might already be removed.
+      }
+    } else if (worktreePath) {
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+
+    console.log(`    removed worktree ${worktreePath}`);
     ctx.artifacts.worktree_created = false;
+    delete ctx.artifacts.worktree_mode;
+    delete ctx.artifacts.worktree_branch;
+    delete ctx.artifacts.worktree_repo_root;
   },
 };
 
