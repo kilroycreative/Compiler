@@ -477,11 +477,10 @@ export const B5_merge: StageDefinition = {
     const mode = String(ctx.artifacts.worktree_mode ?? "");
     const repoRoot = String(ctx.artifacts.worktree_repo_root ?? "");
     const worktreePath = String(ctx.task.worktree_path ?? "");
-    const taskId = String(ctx.task.task_id ?? "unknown");
+    const taskId = resolveTaskId(ctx.task.task_id);
     const branch = String(ctx.artifacts.worktree_branch ?? `factory/${taskId}`);
     const description = String(ctx.task.description ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
-    const safeDescription = description.replace(/["`$\\]/g, "");
-    const commitMessage = `factory: ${taskId} — ${safeDescription || "task update"}`;
+    const commitMessage = `factory: ${taskId} — ${description || "task update"}`;
     const mergeMessage = `factory: merge ${taskId}`;
 
     ctx.task.merge_conflict = false;
@@ -492,9 +491,9 @@ export const B5_merge: StageDefinition = {
       return;
     }
 
-    execSync("git add -A", { cwd: worktreePath, stdio: "ignore" });
+    execFileSync("git", ["add", "-A"], { cwd: worktreePath, stdio: "ignore" });
     try {
-      execSync(`git commit -m ${JSON.stringify(commitMessage)}`, {
+      execFileSync("git", ["commit", "-m", commitMessage], {
         cwd: worktreePath,
         stdio: "pipe",
       });
@@ -505,9 +504,9 @@ export const B5_merge: StageDefinition = {
       }
     }
 
-    execSync("git checkout main", { cwd: repoRoot, stdio: "ignore" });
+    execFileSync("git", ["checkout", "main"], { cwd: repoRoot, stdio: "ignore" });
     try {
-      execSync(`git merge --no-ff ${branch} -m ${JSON.stringify(mergeMessage)}`, {
+      execFileSync("git", ["merge", "--no-ff", branch, "-m", mergeMessage], {
         cwd: repoRoot,
         stdio: "pipe",
       });
@@ -523,7 +522,7 @@ export const B5_merge: StageDefinition = {
     ctx.artifacts.merge_completed = true;
     ctx.artifacts.merge_target_branch = branch;
     ctx.artifacts.merge_repo_root = repoRoot;
-    ctx.artifacts.merge_commit = execSync("git rev-parse HEAD", {
+    ctx.artifacts.merge_commit = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -535,13 +534,13 @@ export const B5_merge: StageDefinition = {
 
     if (repoRoot) {
       try {
-        execSync("git merge --abort", { cwd: repoRoot, stdio: "ignore" });
+        execFileSync("git", ["merge", "--abort"], { cwd: repoRoot, stdio: "ignore" });
       } catch {
         // No in-progress merge is fine.
       }
       if (ctx.artifacts.merge_completed === true) {
         try {
-          execSync("git reset --hard HEAD~1", { cwd: repoRoot, stdio: "ignore" });
+          execFileSync("git", ["reset", "--hard", "HEAD~1"], { cwd: repoRoot, stdio: "ignore" });
         } catch {
           // Best-effort rollback.
         }
