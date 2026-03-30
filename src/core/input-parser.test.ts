@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseUserInput, extractFilePaths } from "./input-parser.js";
+import { parseUserInput, extractFilePaths, extractIdentifiers } from "./input-parser.js";
 
 describe("parseUserInput", () => {
   it("extracts a known action verb", () => {
@@ -74,5 +74,46 @@ describe("extractFilePaths", () => {
   it("ignores bare filenames without directory separators", () => {
     const paths = extractFilePaths("update README.md");
     assert.deepEqual(paths, []);
+  });
+});
+
+describe("extractIdentifiers", () => {
+  it("extracts camelCase identifiers", () => {
+    const ids = extractIdentifiers("refactor parseUserInput to handle edge cases");
+    assert.deepEqual(ids, ["parseUserInput"]);
+  });
+
+  it("extracts PascalCase identifiers", () => {
+    const ids = extractIdentifiers("add a new PipelineContext type");
+    assert.deepEqual(ids, ["PipelineContext"]);
+  });
+
+  it("extracts snake_case identifiers", () => {
+    const ids = extractIdentifiers("rename task_id to use the new format");
+    assert.deepEqual(ids, ["task_id"]);
+  });
+
+  it("extracts SCREAMING_SNAKE_CASE identifiers", () => {
+    const ids = extractIdentifiers("update the MAX_RETRIES constant");
+    assert.deepEqual(ids, ["MAX_RETRIES"]);
+  });
+
+  it("extracts multiple identifiers in order", () => {
+    const ids = extractIdentifiers("move parseUserInput and extractFilePaths into InputParser");
+    assert.deepEqual(ids, ["parseUserInput", "extractFilePaths", "InputParser"]);
+  });
+
+  it("deduplicates repeated identifiers", () => {
+    const ids = extractIdentifiers("use parseUserInput then call parseUserInput again");
+    assert.deepEqual(ids, ["parseUserInput"]);
+  });
+
+  it("ignores plain English words", () => {
+    const ids = extractIdentifiers("add a helper function to parse user input");
+    assert.deepEqual(ids, []);
+  });
+
+  it("returns empty array for empty input", () => {
+    assert.deepEqual(extractIdentifiers(""), []);
   });
 });
