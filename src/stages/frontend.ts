@@ -1,8 +1,17 @@
 import type { StageDefinition, PipelineContext } from "../types.js";
+import { execSync } from "child_process";
 import * as cache from "../core/action-cache.js";
 import { emit } from "../core/event-store.js";
 
 const RETRY_FRONTEND = { when: "on_error" as const, max_retries: 2 };
+
+function getBaseCommit(): string {
+  try {
+    return execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+  } catch {
+    return "no-git-repo";
+  }
+}
 
 // F1 — Parse Task
 export const F1_parse: StageDefinition = {
@@ -28,7 +37,7 @@ export const F1_parse: StageDefinition = {
       ctx.task.task_id = `task_${Date.now().toString(36)}`;
     }
     ctx.task.source = ctx.task.source ?? "cli";
-    ctx.task.base_commit = ctx.task.base_commit ?? "abc1234";
+    ctx.task.base_commit = ctx.task.base_commit ?? getBaseCommit();
     ctx.task.idempotency_key = cache.computeKey({
       description: ctx.task.description,
       base_commit: ctx.task.base_commit,
