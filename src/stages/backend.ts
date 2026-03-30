@@ -4,50 +4,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { StageDefinition, PipelineContext, SlopMetrics } from "../types.js";
 import { runSlopAnalysis } from "../core/slop-runner.js";
-import {
-  ClaudeCodeAdapter,
-  type AgentAdapter,
-  type AgentResult,
-  type AgentSession,
-} from "../adapters/claude-code.js";
+import type { AgentAdapter, AgentSession } from "../adapters/types.js";
+import { ClaudeCodeAdapter } from "../adapters/claude-code.js";
+import { MockAdapter } from "../adapters/mock.js";
 
 const RETRY_AGENT = { when: "always" as const, max_retries: 3, backoff_ms: [100, 200, 400] };
 const RETRY_NEVER = { when: "never" as const, max_retries: 0 };
 const RETRY_MERGE = { when: "on_error" as const, max_retries: 5 };
 
-type AdapterChoice = "claude" | "openclaw" | "mock";
 const SAFE_TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
-
-class MockAdapter implements AgentAdapter {
-  readonly name: AdapterChoice;
-
-  constructor(runtime: AdapterChoice = "mock") {
-    this.name = runtime;
-  }
-
-  execute(session: AgentSession): AgentResult {
-    const diff = [
-      `--- a/src/example.ts`,
-      `+++ b/src/example.ts`,
-      `@@ -1,3 +1,5 @@`,
-      ` import { foo } from './foo';`,
-      `+import { bar } from './bar';`,
-      ` `,
-      `-export const result = foo();`,
-      `+export const result = foo() + bar();`,
-      `+export const VERSION = '1.1.0';`,
-    ].join("\n");
-
-    return {
-      adapter: this.name,
-      modelUsed: session.model,
-      diff,
-      output: `${this.name} adapter executed in mock mode`,
-      sessionResult: null,
-      toolTrace: [],
-    };
-  }
-}
 
 function hasCommand(binary: string): boolean {
   try {
