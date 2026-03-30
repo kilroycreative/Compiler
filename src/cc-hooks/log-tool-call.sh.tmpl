@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p .factory
+INPUT="$(cat || true)"
+export HOOK_INPUT="$INPUT"
+
+node <<'NODE'
+const fs = require("node:fs");
+
+const tracePath = ".factory/tool-trace.jsonl";
+const raw = process.env.HOOK_INPUT || "";
+
+let payload;
+try {
+  payload = JSON.parse(raw);
+} catch {
+  payload = raw;
+}
+
+let toolName = "unknown";
+if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+  toolName =
+    String(
+      payload.tool_name ??
+      payload.toolName ??
+      payload.tool ??
+      payload.name ??
+      "unknown"
+    );
+}
+
+const line = JSON.stringify({
+  timestamp: new Date().toISOString(),
+  tool_name: toolName,
+  args: payload,
+});
+fs.appendFileSync(tracePath, `${line}\n`, "utf-8");
+NODE

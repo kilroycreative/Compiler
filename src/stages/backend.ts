@@ -2,10 +2,107 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import type { StageDefinition, PipelineContext, SlopMetrics } from "../types.js";
 import { runSlopAnalysis } from "../core/slop-runner.js";
+import {
+  ClaudeCodeAdapter,
+  type AgentAdapter,
+  type AgentResult,
+  type AgentSession,
+} from "../adapters/claude-code.js";
 
 const RETRY_AGENT = { when: "always" as const, max_retries: 3, backoff_ms: [100, 200, 400] };
 const RETRY_NEVER = { when: "never" as const, max_retries: 0 };
 const RETRY_MERGE = { when: "on_error" as const, max_retries: 5 };
+
+type AdapterChoice = "claude" | "openclaw" | "mock";
+
+class MockAdapter implements AgentAdapter {
+  readonly name: AdapterChoice;
+
+  constructor(runtime: AdapterChoice = "mock") {
+    this.name = runtime;
+  }
+
+  execute(session: AgentSession): AgentResult {
+    const diff = [
+      `--- a/src/example.ts`,
+      `+++ b/src/example.ts`,
+      `@@ -1,3 +1,5 @@`,
+      ` import { foo } from './foo';`,
+      `+import { bar } from './bar';`,
+      ` `,
+      `-export const result = foo();`,
+      `+export const result = foo() + bar();`,
+      `+export const VERSION = '1.1.0';`,
+    ].join("\n");
+
+    return {
+      adapter: this.name,
+      modelUsed: session.model,
+      diff,
+      output: `${this.name} adapter executed in mock mode`,
+      sessionResult: null,
+      toolTrace: [],
+    };
+  }
+}
+
+function hasCommand(binary: string): boolean {
+  try {
+    execSync(`command -v ${binary}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function toConstitutionText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry)).join("\n");
+  }
+  if (typeof value === "string") return value;
+  return "Follow session package constraints and only edit authorized files.";
+}
+
+function buildAgentSession(ctx: PipelineContext): AgentSession {
+  const sessionPackage =
+    typeof ctx.task.session_package === "object" && ctx.task.session_package !== null
+      ? (ctx.task.session_package as Record<string, unknown>)
+      : {};
+
+  return {
+    taskId: String(ctx.task.task_id ?? "unknown"),
+    taskDescription: String(sessionPackage.task_description ?? ctx.task.description ?? ""),
+    model: String(sessionPackage.model ?? ctx.task.model ?? "unknown"),
+    worktreePath: String(ctx.task.worktree_path ?? "."),
+    constitution: toConstitutionText(sessionPackage.constitution ?? ctx.artifacts.constitution),
+    authorizedFiles: toStringArray(sessionPackage.authorized_files ?? ctx.task.authorized_files),
+  };
+}
+
+function selectAdapter(): AgentAdapter {
+  const requested = (process.env.COMPILER_AGENT ?? "").trim().toLowerCase();
+
+  if (requested.length > 0) {
+    if (requested === "claude") {
+      if (!hasCommand("claude")) throw new Error("COMPILER_AGENT=claude but `claude` is not on PATH");
+      return new ClaudeCodeAdapter();
+    }
+    if (requested === "openclaw") {
+      console.log("    adapter=openclaw (runtime adapter not implemented yet; using mock fallback)");
+      return new MockAdapter("openclaw");
+    }
+    if (requested === "mock") return new MockAdapter("mock");
+    throw new Error(`Invalid COMPILER_AGENT value: ${requested}. Expected claude|openclaw|mock`);
+  }
+
+  if (hasCommand("claude")) return new ClaudeCodeAdapter();
+  return new MockAdapter("mock");
+}
 
 // B1 — Create Worktree
 export const B1_worktree: StageDefinition = {
@@ -35,7 +132,7 @@ export const B1_worktree: StageDefinition = {
   },
 };
 
-// B2 — Execute Agent (simulated, 80% success rate)
+// B2 — Execute Agent
 export const B2_execute: StageDefinition = {
   id: "B2",
   name: "Execute Agent",
@@ -64,25 +161,19 @@ export const B2_execute: StageDefinition = {
       return;
     }
 
-    // Simulated agent execution (80% success)
-    const success = Math.random() < 0.8;
-    if (!success) throw new Error("Agent execution failed (simulated)");
+    const session = buildAgentSession(ctx);
+    const adapter = selectAdapter();
+    console.log(`    adapter=${adapter.name}`);
 
-    ctx.artifacts.diff = [
-      `--- a/src/example.ts`,
-      `+++ b/src/example.ts`,
-      `@@ -1,3 +1,5 @@`,
-      ` import { foo } from './foo';`,
-      `+import { bar } from './bar';`,
-      ` `,
-      `-export const result = foo();`,
-      `+export const result = foo() + bar();`,
-      `+export const VERSION = '1.1.0';`,
-    ].join("\n");
-    ctx.artifacts.model_used = ctx.task.model;
+    const result = adapter.execute(session);
+    ctx.artifacts.diff = result.diff;
+    ctx.artifacts.model_used = result.modelUsed;
+    ctx.artifacts.agent_result = result;
   },
   async compensate(ctx: PipelineContext) {
     delete ctx.artifacts.diff;
+    delete ctx.artifacts.model_used;
+    delete ctx.artifacts.agent_result;
   },
 };
 
