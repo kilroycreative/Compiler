@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "PreToolCall": [
+      {
+        "matcher": "file_write|file_edit|shell_exec",
+        "hook": ".factory/hooks/enforce-authorized-files.sh"
+      }
+    ],
+    "PostToolCall": [
+      {
+        "hook": ".factory/hooks/log-tool-call.sh"
+      }
+    ],
+    "Stop": [
+      {
+        "hook": ".factory/hooks/capture-session-result.sh"
+      }
+    ]
+  }
+}
