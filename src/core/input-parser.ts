@@ -32,3 +32,20 @@ export function parseUserInput(raw: string): ParsedInput {
 
   return { action, target, description };
 }
+
+// Matches paths like src/core/foo.ts, ./lib/bar.js, components/Baz.tsx
+const FILE_PATH_PATTERN = /(?:^|\s)(\.?\.?(?:[\w.@-]+\/)+[\w.@-]+\.[\w]+)(?=\s|$)/g;
+
+/**
+ * Extract file path references from user input text.
+ * Useful for inferring authorized_files and dependency scope.
+ */
+export function extractFilePaths(text: string): string[] {
+  const paths: string[] = [];
+  let m: RegExpExecArray | null;
+  FILE_PATH_PATTERN.lastIndex = 0;
+  while ((m = FILE_PATH_PATTERN.exec(text)) !== null) {
+    paths.push(m[1]);
+  }
+  return paths;
+}
