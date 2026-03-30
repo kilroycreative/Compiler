@@ -1,5 +1,6 @@
 import type { StageDefinition, PipelineContext } from "../types.js";
 import { agentsMdFromContext } from "../harness/agents-md.js";
+import { allowedToolsForTier } from "../harness/tool-masks.js";
 
 const RETRY_ANALYSIS = { when: "on_error" as const, max_retries: 2 };
 
@@ -126,11 +127,13 @@ export const M5_session: StageDefinition = {
   },
   retry: RETRY_ANALYSIS,
   async execute(ctx: PipelineContext) {
+    const riskTier = (ctx.task.risk_tier as 1 | 2 | 3) ?? 1;
     ctx.task.session_package = {
       model: ctx.task.model,
       constitution: ctx.artifacts.constitution,
       authorized_files: ctx.task.authorized_files,
       task_description: ctx.task.description,
+      allowed_tools: allowedToolsForTier(riskTier),
     };
     ctx.task.timeout_ms = 300_000;
     ctx.task.max_retries = 3;
