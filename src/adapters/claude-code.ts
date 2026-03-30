@@ -62,8 +62,10 @@ export class ClaudeCodeAdapter implements AgentAdapter {
   }
 
   private writeHookScripts(worktreePath: string, hooksDir: string, authorizedFiles: string[]): void {
+    const authorizedFilesPath = join(hooksDir, "authorized-files.json");
+    writeFileSync(authorizedFilesPath, JSON.stringify(authorizedFiles), "utf-8");
+
     const replacements = {
-      AUTHORIZED_GLOBS_JSON: JSON.stringify(authorizedFiles),
       WORKTREE_PATH: worktreePath,
     };
     const hookSpecs: Array<{ template: string; output: string }> = [
