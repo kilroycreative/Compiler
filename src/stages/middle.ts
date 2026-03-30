@@ -1,4 +1,5 @@
 import type { StageDefinition, PipelineContext } from "../types.js";
+import { agentsMdFromContext } from "../harness/agents-md.js";
 
 const RETRY_ANALYSIS = { when: "on_error" as const, max_retries: 2 };
 
@@ -98,9 +99,12 @@ export const M4_constitution: StageDefinition = {
       "3. All new functions must have tests",
       `4. Blast radius: ${ctx.task.blast_radius}`,
     ];
+    ctx.task.agents_md_path = `.factory/constitutions/${ctx.task.task_id}.agents.md`;
+    ctx.artifacts.agents_md = agentsMdFromContext(ctx);
   },
   async compensate(ctx: PipelineContext) {
     delete ctx.artifacts.constitution;
+    delete ctx.artifacts.agents_md;
   },
 };
 
