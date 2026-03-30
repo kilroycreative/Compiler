@@ -1,31 +1,9 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execSync, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import type { AgentAdapter, AgentResult, AgentSession } from "./types.js";
 
-export type AgentRuntime = "claude" | "openclaw" | "mock";
-
-export interface AgentSession {
-  taskId: string;
-  taskDescription: string;
-  model: string;
-  worktreePath: string;
-  constitution: string;
-  authorizedFiles: string[];
-}
-
-export interface AgentResult {
-  adapter: AgentRuntime;
-  modelUsed: string;
-  diff: string;
-  output: string;
-  sessionResult: Record<string, unknown> | null;
-  toolTrace: Array<Record<string, unknown>>;
-}
-
-export interface AgentAdapter {
-  readonly name: AgentRuntime;
-  execute(session: AgentSession): AgentResult;
-}
+export type { AgentRuntime, AgentAdapter, AgentResult, AgentSession } from "./types.js";
 
 export class ClaudeCodeAdapter implements AgentAdapter {
   readonly name = "claude" as const;
