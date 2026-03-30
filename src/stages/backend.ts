@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { StageDefinition, PipelineContext, SlopMetrics } from "../types.js";
@@ -16,6 +16,7 @@ const RETRY_NEVER = { when: "never" as const, max_retries: 0 };
 const RETRY_MERGE = { when: "on_error" as const, max_retries: 5 };
 
 type AdapterChoice = "claude" | "openclaw" | "mock";
+const SAFE_TASK_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 class MockAdapter implements AgentAdapter {
   readonly name: AdapterChoice;
@@ -50,7 +51,7 @@ class MockAdapter implements AgentAdapter {
 
 function hasCommand(binary: string): boolean {
   try {
-    execSync(`command -v ${binary}`, { stdio: "ignore" });
+    execFileSync("which", [binary], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -62,11 +63,28 @@ function envFlagEnabled(value: string | undefined): boolean {
   return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
+function resolveTaskId(rawTaskId: unknown): string {
+  const fallbackTaskId = `task_${Date.now().toString(36)}`;
+  const taskId = String(rawTaskId ?? fallbackTaskId);
+  if (!SAFE_TASK_ID_PATTERN.test(taskId)) {
+    throw new Error(`Invalid task_id: ${taskId}. Allowed pattern: ${SAFE_TASK_ID_PATTERN.source}`);
+  }
+  return taskId;
+}
+
 function errorOutput(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
   const withStreams = error as Error & { stdout?: string | Buffer; stderr?: string | Buffer };
-  const stdout = typeof withStreams.stdout === "string" ? withStreams.stdout : "";
-  const stderr = typeof withStreams.stderr === "string" ? withStreams.stderr : "";
+  const stdout = typeof withStreams.stdout === "string"
+    ? withStreams.stdout
+    : Buffer.isBuffer(withStreams.stdout)
+      ? withStreams.stdout.toString("utf-8")
+      : "";
+  const stderr = typeof withStreams.stderr === "string"
+    ? withStreams.stderr
+    : Buffer.isBuffer(withStreams.stderr)
+      ? withStreams.stderr.toString("utf-8")
+      : "";
   const combined = `${stdout}\n${stderr}`.trim();
   return combined || error.message;
 }
@@ -138,14 +156,14 @@ export const B1_worktree: StageDefinition = {
   },
   retry: { when: "on_error", max_retries: 2 },
   async execute(ctx: PipelineContext) {
-    const taskId = String(ctx.task.task_id ?? `task_${Date.now().toString(36)}`);
+    const taskId = resolveTaskId(ctx.task.task_id);
     const branch = `factory/${taskId}`;
     const relativeWorktreePath = `.factory/worktrees/${taskId}`;
     const forceRecreate = envFlagEnabled(process.env.COMPILER_WORKTREE_RECREATE);
 
     let repoRoot = "";
     try {
-      repoRoot = execSync("git rev-parse --show-toplevel", {
+      repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
@@ -171,7 +189,7 @@ export const B1_worktree: StageDefinition = {
 
     let branchExists = false;
     try {
-      execSync(`git rev-parse --verify refs/heads/${branch}`, {
+      execFileSync("git", ["rev-parse", "--verify", `refs/heads/${branch}`], {
         cwd: repoRoot,
         stdio: "ignore",
       });
@@ -182,22 +200,22 @@ export const B1_worktree: StageDefinition = {
 
     if (branchExists && forceRecreate) {
       try {
-        execSync(`git worktree remove ${worktreePath} --force`, { cwd: repoRoot, stdio: "ignore" });
+        execFileSync("git", ["worktree", "remove", worktreePath, "--force"], { cwd: repoRoot, stdio: "ignore" });
       } catch {
         // Ignore cleanup miss; branch delete below still ensures recreate can proceed.
       }
-      execSync(`git branch -D ${branch}`, { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["branch", "-D", branch], { cwd: repoRoot, stdio: "ignore" });
       branchExists = false;
     }
 
     if (branchExists) {
       if (!existsSync(worktreePath)) {
-        execSync(`git worktree add ${worktreePath} ${branch}`, { cwd: repoRoot, stdio: "ignore" });
+        execFileSync("git", ["worktree", "add", worktreePath, branch], { cwd: repoRoot, stdio: "ignore" });
       } else {
         console.log(`    reusing existing worktree for ${branch}`);
       }
     } else {
-      execSync(`git worktree add ${worktreePath} -b ${branch} HEAD`, { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["worktree", "add", worktreePath, "-b", branch, "HEAD"], { cwd: repoRoot, stdio: "ignore" });
     }
 
     ctx.task.worktree_path = worktreePath;
@@ -215,12 +233,12 @@ export const B1_worktree: StageDefinition = {
 
     if (mode === "git" && repoRoot && branch) {
       try {
-        execSync(`git worktree remove ${worktreePath} --force`, { cwd: repoRoot, stdio: "ignore" });
+        execFileSync("git", ["worktree", "remove", worktreePath, "--force"], { cwd: repoRoot, stdio: "ignore" });
       } catch {
         // Best-effort cleanup.
       }
       try {
-        execSync(`git branch -D ${branch}`, { cwd: repoRoot, stdio: "ignore" });
+        execFileSync("git", ["branch", "-D", branch], { cwd: repoRoot, stdio: "ignore" });
       } catch {
         // Branch might already be removed.
       }
@@ -478,7 +496,7 @@ export const B5_merge: StageDefinition = {
     try {
       execSync(`git commit -m ${JSON.stringify(commitMessage)}`, {
         cwd: worktreePath,
-        stdio: "ignore",
+        stdio: "pipe",
       });
     } catch (error) {
       const output = errorOutput(error);
