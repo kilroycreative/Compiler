@@ -23,10 +23,20 @@ export interface TaskIR_L3 extends TaskIR_L2 {
   recovery: string;
 }
 
+// ── Session Package ───────────────────────────────────────────────
+
+export interface SessionPackage {
+  model: string;
+  constitution: unknown;
+  authorized_files: string[];
+  task_description: string;
+  allowed_tools: string[];
+}
+
 export interface TaskIR_L4 extends TaskIR_L3 {
   model: string;
   worktree_path: string;
-  session_package: Record<string, unknown>;
+  session_package: SessionPackage;
   constitution_path: string;
   timeout_ms: number;
   max_retries: number;
