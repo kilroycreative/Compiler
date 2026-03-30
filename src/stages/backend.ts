@@ -62,6 +62,15 @@ function envFlagEnabled(value: string | undefined): boolean {
   return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
+function errorOutput(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const withStreams = error as Error & { stdout?: string | Buffer; stderr?: string | Buffer };
+  const stdout = typeof withStreams.stdout === "string" ? withStreams.stdout : "";
+  const stderr = typeof withStreams.stderr === "string" ? withStreams.stderr : "";
+  const combined = `${stdout}\n${stderr}`.trim();
+  return combined || error.message;
+}
+
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === "string");
@@ -447,13 +456,85 @@ export const B5_merge: StageDefinition = {
   },
   retry: RETRY_MERGE,
   async execute(ctx: PipelineContext) {
-    // Simulated merge
-    ctx.artifacts.merge_commit = `merge_${Date.now().toString(36)}`;
+    const mode = String(ctx.artifacts.worktree_mode ?? "");
+    const repoRoot = String(ctx.artifacts.worktree_repo_root ?? "");
+    const worktreePath = String(ctx.task.worktree_path ?? "");
+    const taskId = String(ctx.task.task_id ?? "unknown");
+    const branch = String(ctx.artifacts.worktree_branch ?? `factory/${taskId}`);
+    const description = String(ctx.task.description ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+    const safeDescription = description.replace(/["`$\\]/g, "");
+    const commitMessage = `factory: ${taskId} — ${safeDescription || "task update"}`;
+    const mergeMessage = `factory: merge ${taskId}`;
+
+    ctx.task.merge_conflict = false;
+
+    if (mode !== "git" || !repoRoot || !worktreePath) {
+      ctx.artifacts.merge_commit = "no-git-merge";
+      console.log(`    merge skipped (non-git mode)`);
+      return;
+    }
+
+    execSync("git add -A", { cwd: worktreePath, stdio: "ignore" });
+    try {
+      execSync(`git commit -m ${JSON.stringify(commitMessage)}`, {
+        cwd: worktreePath,
+        stdio: "ignore",
+      });
+    } catch (error) {
+      const output = errorOutput(error);
+      if (!/nothing to commit|no changes added to commit/i.test(output)) {
+        throw new Error(`Worktree commit failed: ${output}`);
+      }
+    }
+
+    execSync("git checkout main", { cwd: repoRoot, stdio: "ignore" });
+    try {
+      execSync(`git merge --no-ff ${branch} -m ${JSON.stringify(mergeMessage)}`, {
+        cwd: repoRoot,
+        stdio: "pipe",
+      });
+    } catch (error) {
+      const output = errorOutput(error);
+      if (/CONFLICT|merge conflict/i.test(output)) {
+        ctx.task.merge_conflict = true;
+        throw new Error(`Merge conflict detected for ${branch}`);
+      }
+      throw new Error(`Merge failed: ${output}`);
+    }
+
+    ctx.artifacts.merge_completed = true;
+    ctx.artifacts.merge_target_branch = branch;
+    ctx.artifacts.merge_repo_root = repoRoot;
+    ctx.artifacts.merge_commit = execSync("git rev-parse HEAD", {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
     console.log(`    merged → ${ctx.artifacts.merge_commit}`);
   },
   async compensate(ctx: PipelineContext) {
+    const repoRoot = String(ctx.artifacts.merge_repo_root ?? ctx.artifacts.worktree_repo_root ?? "");
+
+    if (repoRoot) {
+      try {
+        execSync("git merge --abort", { cwd: repoRoot, stdio: "ignore" });
+      } catch {
+        // No in-progress merge is fine.
+      }
+      if (ctx.artifacts.merge_completed === true) {
+        try {
+          execSync("git reset --hard HEAD~1", { cwd: repoRoot, stdio: "ignore" });
+        } catch {
+          // Best-effort rollback.
+        }
+      }
+    }
+
     console.log(`    reverting merge ${ctx.artifacts.merge_commit}`);
     delete ctx.artifacts.merge_commit;
+    delete ctx.artifacts.merge_completed;
+    delete ctx.artifacts.merge_repo_root;
+    delete ctx.artifacts.merge_target_branch;
   },
 };
 
