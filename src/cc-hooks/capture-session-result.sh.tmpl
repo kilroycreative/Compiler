@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p .factory
+INPUT="$(cat || true)"
+export HOOK_INPUT="$INPUT"
+
+node <<'NODE'
+const fs = require("node:fs");
+const { execSync } = require("node:child_process");
+
+const raw = process.env.HOOK_INPUT || "";
+let stopEvent = null;
+try {
+  stopEvent = JSON.parse(raw);
+} catch {
+  stopEvent = { raw };
+}
+
+let diff = "";
+try {
+  diff = execSync("git diff --no-color", {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+} catch (err) {
+  if (err && typeof err === "object" && "stdout" in err && typeof err.stdout === "string") {
+    diff = err.stdout;
+  }
+}
+
+const tokenUsage = findTokenUsage(stopEvent);
+
+const payload = {
+  captured_at: new Date().toISOString(),
+  diff,
+  token_usage: tokenUsage,
+  stop_event: stopEvent,
+};
+fs.writeFileSync(".factory/session-result.json", `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+
+function findTokenUsage(node) {
+  const queue = [node];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      for (const entry of current) queue.push(entry);
+      continue;
+    }
+    const record = current;
+    const hasUsageShape =
+      typeof record.input_tokens === "number" ||
+      typeof record.output_tokens === "number" ||
+      typeof record.total_tokens === "number" ||
+      typeof record.prompt_tokens === "number" ||
+      typeof record.completion_tokens === "number";
+    if (hasUsageShape) {
+      return record;
+    }
+    for (const value of Object.values(record)) {
+      queue.push(value);
+    }
+  }
+  return null;
+}
+NODE
