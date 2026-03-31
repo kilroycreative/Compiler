@@ -1,5 +1,13 @@
 // ── User Input Parser ─────────────────────────────────────────────
 
+export interface AnalyzedInput {
+  action: string;
+  target: string;
+  description: string;
+  identifiers: string[];
+  filePaths: string[];
+}
+
 export interface ParsedInput {
   action: string;
   target: string;
@@ -72,4 +80,15 @@ export function extractFilePaths(text: string): string[] {
     paths.push(m[1]);
   }
   return paths;
+}
+
+/**
+ * Analyze raw user input into a structured result combining action parsing,
+ * identifier extraction, and file path detection.
+ */
+export function analyzeInput(raw: string): AnalyzedInput {
+  const { action, target, description } = parseUserInput(raw);
+  const identifiers = extractIdentifiers(raw);
+  const filePaths = extractFilePaths(raw);
+  return { action, target, description, identifiers, filePaths };
 }

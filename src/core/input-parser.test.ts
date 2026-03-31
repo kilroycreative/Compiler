@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseUserInput, extractFilePaths, extractIdentifiers } from "./input-parser.js";
+import { parseUserInput, extractFilePaths, extractIdentifiers, analyzeInput } from "./input-parser.js";
 
 describe("parseUserInput", () => {
   it("extracts a known action verb", () => {
@@ -115,5 +115,34 @@ describe("extractIdentifiers", () => {
 
   it("returns empty array for empty input", () => {
     assert.deepEqual(extractIdentifiers(""), []);
+  });
+});
+
+describe("analyzeInput", () => {
+  it("combines action, identifiers, and file paths", () => {
+    const result = analyzeInput("refactor parseUserInput in src/core/input-parser.ts");
+    assert.equal(result.action, "refactor");
+    assert.equal(result.target, "parseUserInput in src/core/input-parser.ts");
+    assert.deepEqual(result.identifiers, ["parseUserInput"]);
+    assert.deepEqual(result.filePaths, ["src/core/input-parser.ts"]);
+  });
+
+  it("returns empty arrays when no identifiers or paths found", () => {
+    const result = analyzeInput("add a helper function");
+    assert.equal(result.action, "add");
+    assert.deepEqual(result.identifiers, []);
+    assert.deepEqual(result.filePaths, []);
+  });
+
+  it("preserves the full description", () => {
+    const result = analyzeInput("fix the MAX_RETRIES bug in src/core/pipeline.ts");
+    assert.equal(result.description, "fix the MAX_RETRIES bug in src/core/pipeline.ts");
+    assert.equal(result.action, "fix");
+    assert.deepEqual(result.identifiers, ["MAX_RETRIES"]);
+    assert.deepEqual(result.filePaths, ["src/core/pipeline.ts"]);
+  });
+
+  it("throws on empty input", () => {
+    assert.throws(() => analyzeInput(""), /Empty input/);
   });
 });
