@@ -31,6 +31,7 @@ export interface SessionPackage {
   authorized_files: string[];
   task_description: string;
   allowed_tools: string[];
+  agent_memory?: string;
 }
 
 export interface TaskIR_L4 extends TaskIR_L3 {
@@ -62,7 +63,9 @@ export type PropertyFlag =
   | "PROP_slop_reviewed"
   | "PROP_security_reviewed"
   | "PROP_merged"
-  | "PROP_linked";
+  | "PROP_linked"
+  | "PROP_graded"
+  | "PROP_memory_persisted";
 
 // ── Pipeline Events (Event Sourcing) ───────────────────────────────
 
@@ -78,6 +81,8 @@ export type PipelineEventType =
   | "CacheStore"
   | "CircuitBreakerTripped"
   | "QualityCircuitBreakerTripped"
+  | "TraceGraded"
+  | "MemoryPersisted"
   | "PipelineCompleted"
   | "PipelineFailed";
 
@@ -143,6 +148,18 @@ export interface SlopMetrics {
   delta_cc_high_count: number | null;
   delta_ast_grep_violations: number | null;
   delta_churn_ratio: number | null;
+}
+
+export interface TraceGrade {
+  task_id: string;
+  score: number;
+  retry_count: number;
+  compensation_count: number;
+  duration_ms: number;
+  slop_metrics?: SlopMetrics;
+  cache_hit: boolean;
+  agent_token_usage?: { input: number; output: number };
+  warnings: string[];
 }
 
 // ── Pipeline Context ───────────────────────────────────────────────

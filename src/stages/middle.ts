@@ -1,6 +1,7 @@
 import type { StageDefinition, PipelineContext } from "../types.js";
 import { agentsMdFromContext } from "../harness/agents-md.js";
 import { allowedToolsForTier } from "../harness/tool-masks.js";
+import { getConsolidatedMemory } from "../memory/memory-consolidator.js";
 
 const RETRY_ANALYSIS = { when: "on_error" as const, max_retries: 2 };
 
@@ -128,12 +129,16 @@ export const M5_session: StageDefinition = {
   retry: RETRY_ANALYSIS,
   async execute(ctx: PipelineContext) {
     const riskTier = (ctx.task.risk_tier as 1 | 2 | 3) ?? 1;
+    const agentId = (ctx.task.agent_id ?? ctx.task.assignee_agent_id ?? "default-agent") as string;
+    const agentMemory = getConsolidatedMemory(agentId) ?? undefined;
+
     ctx.task.session_package = {
       model: ctx.task.model,
       constitution: ctx.artifacts.constitution,
       authorized_files: ctx.task.authorized_files,
       task_description: ctx.task.description,
       allowed_tools: allowedToolsForTier(riskTier),
+      agent_memory: agentMemory,
     };
     ctx.task.timeout_ms = 300_000;
     ctx.task.max_retries = 3;
